@@ -42,6 +42,7 @@ def configure(width=1280, height=800, samples=96, threads=0):
     vl.use_pass_z = True
     vl.use_pass_normal = True
     vl.use_pass_object_index = True
+    vl.use_pass_material_index = True
     sc.render.image_settings.media_type = "MULTI_LAYER_IMAGE"
     sc.render.image_settings.file_format = "OPEN_EXR_MULTILAYER"
     sc.render.image_settings.color_depth = "32"
@@ -110,7 +111,8 @@ def render(out_dir, name="beauty", exposure=None, wb=None, passes=True, key=0.20
         exposure = auto_exposure(rgb, idx, key)
     img = tonemap(rgb, exposure)
     Image.fromarray(img).save(os.path.join(out_dir, f"{name}.png"))
-    res = {"image": img, "index": idx, "exposure": exposure, "wb": wb, "linear": rgb}
+    res = {"image": img, "index": idx, "exposure": exposure, "wb": wb, "linear": rgb,
+           "matindex": np.rint(_find(ch, "Material Index", "X")).astype(np.int32)}
     z = _find(ch, "Depth", "Z")
     zz = np.clip(z, 0, 12)
     near, far = np.percentile(zz, 1), np.percentile(zz, 99)

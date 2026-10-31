@@ -65,9 +65,9 @@ def build_sample_room(finishes):
     """A 5 m x 5 m living room with a window on the left wall."""
     sc = bpy.context.scene
     wall_side = M.plaster("#ebe7e0", "Side walls")
-    wall_back = M.CATALOG["wall"][finishes["wall"]]()
+    wall_back = _slot(M.CATALOG["wall"][finishes["wall"]](), "Back wall")
     ceiling = M.plaster("#f3f1ed", "Ceiling")
-    floor = M.CATALOG["floor"][finishes["floor"]]()
+    floor = _slot(M.CATALOG["floor"][finishes["floor"]](), "Floor")
     trim = M.matte("#f2f0ec", "Trim", 0.5)
     frame = M.matte("#2b2b2b", "Window frame", 0.4)
 
@@ -92,7 +92,7 @@ def build_sample_room(finishes):
     box("Skirting", 2.485, 2.5, -0.2, 5.0, 0, 0.09, trim, "side")
 
     # sofa
-    sofa = M.CATALOG["sofa"][finishes["sofa"]]()
+    sofa = _slot(M.CATALOG["sofa"][finishes["sofa"]](), "Sofa fabric")
     leg = M.walnut("#3a2618", "Sofa legs")
     box("Sofa base", -1.2, 1.2, 4.0, 4.95, 0.1, 0.42, sofa, "sofa", 0.03)
     box("Sofa back", -1.08, 1.08, 4.74, 4.95, 0.42, 0.86, sofa, "sofa", 0.04)
@@ -108,8 +108,8 @@ def build_sample_room(finishes):
             box("Sofa leg", x - 0.03, x + 0.03, y - 0.03, y + 0.03, 0, 0.1, leg, "sofa")
 
     # rug + coffee table
-    box("Rug", -1.5, 1.5, 2.1, 4.55, 0, 0.012, M.CATALOG["rug"][finishes["rug"]](), "rug", 0.004)
-    table = M.CATALOG["table"][finishes["table"]]()
+    box("Rug", -1.5, 1.5, 2.1, 4.55, 0, 0.012, _slot(M.CATALOG["rug"][finishes["rug"]](), "Rug"), "rug", 0.004)
+    table = _slot(M.CATALOG["table"][finishes["table"]](), "Coffee table")
     box("Table top", -0.62, 0.62, 2.75, 3.45, 0.36, 0.40, table, "table", 0.008)
     for x in (-0.56, 0.56):
         for y in (2.81, 3.39):
@@ -158,6 +158,8 @@ def import_model(path):
         bpy.ops.import_scene.fbx(filepath=path)
     else:
         raise ValueError("Export from SketchUp as .fbx or .glb")
+    for m in bpy.data.materials:
+        m["slot"] = m.name  # the SketchUp material name: stable id for assignments
     words = {"sofa": "sofa", "couch": "sofa", "rug": "rug", "carpet": "rug", "floor": "floor",
              "table": "table", "lamp": "pendant", "light": "pendant", "window": "window",
              "glass": "window", "art": "art", "frame": "art", "wall": "wall", "ceiling": "ceiling"}
@@ -197,6 +199,66 @@ def auto_camera():
     size = hi - lo
     z = lo.z + min(1.5, max(0.4 * size.z, 0.5))
     return dict(location=((lo.x + hi.x) / 2, lo.y + 0.08 * size.y, z), lens=16, shift_y=0.0)
+
+
+def _slot(mat, slot):
+    mat["slot"] = slot
+    return mat
+
+
+def _srgb_hex(rgba):
+    to = lambda c: c * 12.92 if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return "#" + "".join(f"{round(max(0, min(1, to(c))) * 255):02x}" for c in rgba[:3])
+
+
+def scene_materials():
+    """Every material on a mesh, keyed by its slot (the SketchUp material name).
+    Gives each one a stable pass_index, so the render can output a material map."""
+    found = {}
+    for ob in bpy.context.scene.objects:
+        if ob.type != "MESH":
+            continue
+        for m in ob.data.materials:
+            if not m:
+                continue
+            slot = m.get("slot") or m.name
+            m["slot"] = slot
+            info = found.setdefault(slot, {"slot": slot, "objects": set(), "mats": []})
+            info["objects"].add(ob.get("semantic", "side"))
+            if m not in info["mats"]:
+                info["mats"].append(m)
+    out = []
+    for i, slot in enumerate(sorted(found), 1):
+        info = found[slot]
+        m = info["mats"][0]
+        color, texture = _srgb_hex(m.diffuse_color), None
+        b = m.node_tree.nodes.get("Principled BSDF") if m.use_nodes and m.node_tree else None
+        if b:
+            sock = b.inputs["Base Color"]
+            color = _srgb_hex(sock.default_value)
+            for link in sock.links:
+                if link.from_node.type == "TEX_IMAGE" and link.from_node.image:
+                    texture = link.from_node.image.name
+        for mm in info["mats"]:
+            mm.pass_index = i
+        out.append({"slot": slot, "index": i, "color": color, "texture": texture,
+                    "objects": sorted(info["objects"])})
+    return out
+
+
+def apply_materials(assign, library):
+    """Scene-first material swap: {slot: library value}. Every face that used the
+    SketchUp material gets the library material, nothing else changes."""
+    for slot, value in assign.items():
+        entry, tint = library.get(value)
+        new = M.from_library(entry, tint)
+        new["slot"] = slot
+        for ob in bpy.context.scene.objects:
+            if ob.type != "MESH":
+                continue
+            for i, m in enumerate(ob.data.materials):
+                if m and (m.get("slot") or m.name) == slot:
+                    ob.data.materials[i] = new
 
 
 def set_finish(key, finish):

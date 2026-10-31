@@ -51,7 +51,9 @@ are stored.
 | File | What it does |
 | --- | --- |
 | `ai_render/scene.py` | Sample room, SketchUp import, semantic tags, scene-first `set_finish` |
-| `ai_render/materials.py` | Procedural PBR materials and the finish catalog |
+| `ai_render/materials.py` | Procedural PBR recipes, scanned-texture materials, the finish catalog |
+| `ai_render/library.py` | Material library, search, and SketchUp material matching |
+| `ai_render/polyhaven.py` | Downloads CC0 scanned materials from Poly Haven |
 | `ai_render/lighting.py` | Sky, sun and interior fixtures per moment |
 | `ai_render/render.py` | Cycles setup, multilayer EXR read, passes, tone mapping |
 | `ai_render/edit.py` | Edit region, masked composite, drift verifier |
@@ -60,6 +62,31 @@ are stored.
 | `ai_render/server.py` | FastAPI web API |
 | `ai_render/cli.py` | One render in a fresh process (used by the web app) |
 | `ai_render/web/index.html` | The Render Studio screen |
+
+## Materials
+
+SketchUp already records which material sits on which face, and the export keeps it. On upload we:
+
+1. List the model's materials (name, colour, texture) without rendering (`cli --inspect`).
+2. Match each one to the library from its name and colour (`ai_render/library.py`). For example,
+   `Wood_Floor_Oak` becomes Oak planks, and `Fabric_Grey` becomes Linen in the same grey.
+   A generic name with nothing to go on (`Color_A01`) is kept as the SketchUp original rather than guessed.
+3. Render with those materials, plus a material map (Cycles material index pass).
+
+In the app, tap anything in the picture: the material map says exactly which SketchUp material you hit.
+Pick a suggestion or search the library. Every surface with that material changes and nothing else does
+(masked composite, same check as other edits). Materials can be locked.
+
+The library has 29 built-in procedural materials. Photo-scanned materials from Poly Haven (CC0) can be added:
+
+```bash
+python -m ai_render.polyhaven --search oak
+python -m ai_render.polyhaven --get <asset id> --res 2k
+python -m ai_render.polyhaven --starter      # the most used scans per category
+```
+
+Scans are saved to `data/library/` (or `AI_RENDER_LIBRARY`) and show up in the app with a "scan" tag.
+They are mapped at real-world size with box projection, so they work on SketchUp faces without good UVs.
 
 ## AI finish (fal)
 

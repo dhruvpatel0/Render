@@ -13,6 +13,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from . import ai_finish as A
+from . import library as L
 from . import service as S
 
 
@@ -49,6 +50,7 @@ class Entry:
         self.model = os.path.basename(model_path) if model_path else None
         self.status, self.error, self.version, self.pending = "idle", None, 0, 0
         self.index, self.outside_identical, self.generation, self.ai = None, True, 0, None
+        self.matindex, self.materials = None, None
 
 
 def _get(pid):
@@ -65,6 +67,7 @@ def _compose(e, gen):
             return  # a newer edit superseded this one
         Image.fromarray(out["image"]).save(os.path.join(e.dir, "current.png"))
         e.index, e.outside_identical, e.ai = out["index"], out["outside_identical"], out.get("ai")
+        e.matindex, e.materials = out.get("matindex"), out.get("materials")
         e.version += 1
         e.status, e.error = "ready", None
     except Exception as ex:  # surfaced to the UI
@@ -103,6 +106,13 @@ def ai_status():
 @app.get("/api/catalog")
 def catalog():
     return {"finishes": S.SWATCH, "moments": S.MOMENTS, "names": S.NAMES}
+
+
+@app.get("/api/library")
+def library(q: str = "", category: str | None = None):
+    lib = L.default_library()
+    return {"categories": sorted({x.category for x in lib.entries.values()}),
+            "items": [x.to_json() for x in lib.search(q, category)]}
 
 
 @app.post("/api/projects")
@@ -195,11 +205,17 @@ def pick(pid: str, x: float, y: float):
     e = _get(pid)
     if e.index is None:
         raise HTTPException(409, "Still rendering")
-    return e.project.pick(e.index, x, y)
+    return e.project.pick(e.index, x, y, e.matindex, e.materials)
+
+
+@app.get("/api/projects/{pid}/material")
+def material(pid: str, slot: str):
+    e = _get(pid)
+    return {"object": None, "name": slot, "material": e.project.material_view(slot)}
 
 
 @app.get("/api/projects/{pid}/mask.png")
-def mask(pid: str, object: str):
+def mask(pid: str, object: str = "", material: str = ""):
     """Selection overlay: a soft tint over the object plus a crisp outline."""
     import io
     import numpy as np
@@ -207,9 +223,15 @@ def mask(pid: str, object: str):
     from fastapi.responses import Response
     from .scene import SEMANTIC
     e = _get(pid)
-    if e.index is None or object not in SEMANTIC:
+    if material and e.matindex is not None and e.materials:
+        i = next((x["index"] for x in e.materials if x["slot"] == material), None)
+        if i is None:
+            raise HTTPException(404, "No mask")
+        m = e.matindex == i
+    elif e.index is not None and object in SEMANTIC:
+        m = e.index == SEMANTIC[object]
+    else:
         raise HTTPException(404, "No mask")
-    m = e.index == SEMANTIC[object]
     edge = ndimage.binary_dilation(m, iterations=2) & ~m
     rgba = np.zeros(m.shape + (4,), np.uint8)
     rgba[m] = (255, 106, 61, 46)

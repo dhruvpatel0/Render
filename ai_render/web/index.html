@@ -50,6 +50,15 @@ button:disabled{opacity:.5;cursor:default}
 .layers{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:.78rem}
 .layers label{display:flex;gap:8px;align-items:center;padding:4px 6px;border-radius:4px;background:var(--bg)}
 .link{background:none;border:0;padding:0;color:var(--accent);font-size:.82rem;text-decoration:underline}
+.lib{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.lib input{font:inherit;font-size:.86rem;padding:7px 10px;border:1px solid var(--line);border-radius:4px;background:var(--bg);color:var(--ink)}
+.mats{display:flex;flex-direction:column;gap:2px}
+.mat{display:flex;align-items:center;gap:8px;border:0;background:transparent;text-align:left;padding:5px 6px;border-radius:4px;font-size:.82rem}
+.mat:hover,.mat[aria-pressed=true]{background:var(--bg)}
+.mat i{width:14px;height:14px;border-radius:3px;flex:none;border:1px solid rgba(0,0,0,.15)}
+.mat span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mat small{font-family:var(--mono);color:var(--muted);font-size:.7rem}
+.tag{font-family:var(--mono);font-size:.68rem;color:var(--green)}
 .trust{font-size:.8rem;color:var(--green);font-family:var(--mono)}
 /* start screen */
 .start{grid-column:1/-1;display:flex;align-items:center;justify-content:center;padding:24px}
@@ -109,7 +118,17 @@ button:disabled{opacity:.5;cursor:default}
       <div class="sel" id="selName">Nothing selected</div>
       <div class="hint" id="selHint">Tap an object in the picture.</div>
       <div class="swatches" id="swatches"></div>
-      <div class="row" id="lockRow" hidden>Lock this object <button class="toggle" id="tLock" aria-label="Lock selected object"></button></div>
+      <div class="row" id="lockRow" hidden>Lock this material <button class="toggle" id="tLock" aria-label="Lock selected material"></button></div>
+      <div class="lib" id="lib" hidden>
+        <span class="eyebrow">Library</span>
+        <input id="libQ" placeholder="Search: oak, marble, velvet…" autocomplete="off" aria-label="Search the material library">
+        <div class="seg" id="libCats"></div>
+        <div class="swatches" id="libItems"></div>
+      </div>
+    </div>
+    <div class="group" id="matGroup" hidden><span class="eyebrow">Materials in your model</span>
+      <div class="hint">Matched from the SketchUp names and colours. Tap one to change it.</div>
+      <div class="mats" id="mats"></div>
     </div>
     <div class="group"><span class="eyebrow">Describe a change</span>
       <form class="ask" id="ask"><input id="askText" placeholder="night, sofa forest green" autocomplete="off" aria-label="Describe a change"><button class="primary" type="submit">Apply</button></form>
@@ -124,7 +143,7 @@ button:disabled{opacity:.5;cursor:default}
 <script>
 (() => {
 const $ = id => document.getElementById(id);
-let cat = null, P = null, sel = null, poll = null, toastT = null;
+let cat = null, P = null, sel = null, poll = null, toastT = null, libCat = null, libT = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, opts);
@@ -163,13 +182,13 @@ function wire() {
     const r = e.target.getBoundingClientRect();
     try { sel = await api(`/api/projects/${P.id}/pick?x=${(e.clientX - r.left) / r.width}&y=${(e.clientY - r.top) / r.height}`); }
     catch (err) { toast(err.message); return; }
-    $('overlay').src = `/api/projects/${P.id}/mask.png?object=${sel.object}&v=${P.version}`;
-    $('overlay').hidden = false; steps(['refine']); panel();
+    select(sel);
   });
+  $('libQ').addEventListener('input', () => { clearTimeout(libT); libT = setTimeout(browse, 200); });
   $('tPendant').onclick = () => layer('lights', `Lights: ${P.state.pendant ? 'off' : 'on'}`, {pendant: !P.state.pendant});
   $('tCove').onclick = () => layer('cove', `LED cove: ${P.state.cove ? 'off' : 'on'}`, {cove: !P.state.cove});
   $('tAI').onclick = () => { if (!P.ai.available) return toast('AI finish is not set up on this server yet.'); layer('ai', `AI finish: ${P.ai.on ? 'off' : 'on'}`, {ai_finish: !P.ai.on}); };
-  $('tLock').onclick = async () => { P = await api(`/api/projects/${P.id}/locks`, json('POST', {object: sel.object, locked: !P.locks.includes(sel.object)})); show(P); };
+  $('tLock').onclick = async () => { const k = lockKey(); P = await api(`/api/projects/${P.id}/locks`, json('POST', {object: k, locked: !P.locks.includes(k)})); await refreshSel(); show(P); };
   $('reset').onclick = async () => { sel = null; $('overlay').hidden = true; P = await api(`/api/projects/${P.id}/reset`, {method: 'POST'}); show(P); watch(); };
   $('ask').addEventListener('submit', async e => {
     e.preventDefault();
@@ -182,8 +201,38 @@ function wire() {
   });
 }
 async function layer(key, label, set) {
-  try { P = await api(`/api/projects/${P.id}/layers`, json('POST', {key, label, set})); show(P); watch(); }
+  try { P = await api(`/api/projects/${P.id}/layers`, json('POST', {key, label, set})); await refreshSel(); show(P); watch(); }
   catch (err) { toast(err.message); }
+}
+const lockKey = () => sel.material ? sel.material.key : sel.object;
+const maskUrl = () => sel.material ? `/api/projects/${P.id}/mask.png?material=${encodeURIComponent(sel.material.slot)}&v=${P.version}`
+  : `/api/projects/${P.id}/mask.png?object=${sel.object}&v=${P.version}`;
+function select(s) {
+  sel = s; $('overlay').src = maskUrl(); $('overlay').hidden = false; steps(['refine']); panel(); if (sel.material) browse();
+}
+async function refreshSel() {
+  if (sel && sel.material) { const r = await api(`/api/projects/${P.id}/material?slot=${encodeURIComponent(sel.material.slot)}`); sel = {...sel, material: r.material}; }
+}
+function swatch(name, color, pressed, onclick, note) {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'sw';
+  const i = document.createElement('i'); i.style.background = color; b.append(i, document.createTextNode(name));
+  if (note) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = note; b.append(t); }
+  b.setAttribute('aria-pressed', pressed); b.onclick = onclick; return b;
+}
+function useMaterial(value, name) {
+  const m = sel.material; layer(m.key, `${m.slot}: ${name}`, {[m.key]: value});
+}
+async function browse() {
+  if (!sel || !sel.material) return;
+  let r; try { r = await api(`/api/library?q=${encodeURIComponent($('libQ').value)}${libCat ? `&category=${libCat}` : ''}`); } catch { return; }
+  const C = $('libCats'); C.innerHTML = '';
+  [null, ...r.categories].forEach(c => { const b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = c || 'all';
+    b.setAttribute('aria-pressed', libCat === c); b.onclick = () => { libCat = c; browse(); }; C.appendChild(b); });
+  const I = $('libItems'); I.innerHTML = '';
+  const locked = P.locks.includes(sel.material.key);
+  r.items.forEach(it => { const b = swatch(it.name, it.color, sel.material.current === it.id, () => useMaterial(it.id, it.name), it.source !== 'Built-in' ? 'scan' : '');
+    b.disabled = locked; b.title = `${it.category} · ${it.source}${it.license ? ' · ' + it.license : ''}`; I.appendChild(b); });
+  if (!r.items.length) I.textContent = 'No materials match.';
 }
 function watch() {
   clearInterval(poll);
@@ -195,7 +244,7 @@ function watch() {
 }
 function show(p) {
   steps(p.status === 'rendering' ? ['render'] : sel ? ['refine'] : ['moment', 'refine']);
-  if (p.image && $('render').getAttribute('src') !== p.image) { $('render').src = p.image; if (sel) $('overlay').src = `/api/projects/${p.id}/mask.png?object=${sel.object}&v=${p.version}`; }
+  if (p.image && $('render').getAttribute('src') !== p.image) { $('render').src = p.image; if (sel) $('overlay').src = maskUrl(); }
   const busy = $('busy');
   busy.hidden = p.status !== 'rendering' && p.status !== 'error';
   busy.textContent = p.status === 'error' ? `Render failed: ${p.error}` : p.pending > 1 ? `Rendering · ${p.pending} passes to go` : 'Rendering…';
@@ -215,13 +264,33 @@ function show(p) {
     cb.onchange = async () => { try { P = await api(`/api/projects/${p.id}/layers/${l.id}`, json('PATCH', {on: cb.checked})); show(P); watch(); } catch (err) { cb.checked = !cb.checked; toast(err.message); } };
     lab.append(cb, document.createTextNode(l.label)); L.appendChild(lab);
   });
+  const G = $('mats'); G.innerHTML = ''; $('matGroup').hidden = !(p.materials && p.materials.length);
+  (p.materials || []).forEach(m => {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'mat';
+    b.setAttribute('aria-pressed', !!(sel && sel.material && sel.material.slot === m.slot));
+    const i = document.createElement('i'); i.style.background = m.color || '#888';
+    const n = document.createElement('span'); n.textContent = m.slot; n.title = m.slot;
+    const c = document.createElement('small'); c.textContent = (m.auto && m.current ? 'auto · ' : '') + m.current_name;
+    b.append(i, n, c);
+    b.onclick = async () => { try { select(await api(`/api/projects/${p.id}/material?slot=${encodeURIComponent(m.slot)}`)); } catch (err) { toast(err.message); } };
+    G.appendChild(b);
+  });
   $('trust').textContent = p.layers.some(l => l.on) && p.status === 'ready' && p.outside_identical ? 'Checked: every pixel outside your edits matches the base render.' : '';
   panel();
 }
 function panel() {
   const nm = $('selName'), hint = $('selHint'), sw = $('swatches'), lr = $('lockRow');
-  sw.innerHTML = '';
+  sw.innerHTML = ''; $('lib').hidden = !(sel && sel.material);
   if (!sel) { nm.textContent = 'Nothing selected'; hint.textContent = 'Tap an object in the picture.'; lr.hidden = true; return; }
+  if (sel.material) {
+    const m = sel.material, locked = P.locks.includes(m.key);
+    nm.textContent = sel.object ? `${sel.name} · ${m.slot}` : m.slot;
+    lr.hidden = false; $('tLock').setAttribute('aria-pressed', locked);
+    hint.textContent = locked ? 'Locked. Edits cannot touch this material.'
+      : `Now: ${m.current_name}${m.auto && m.auto === m.current ? ' (matched automatically)' : ''}. Pick a material: every surface with it changes, nothing else does.`;
+    m.suggestions.forEach(s => { const b = swatch(s.name, s.color, m.current === s.value, () => useMaterial(s.value, s.name)); b.disabled = locked; sw.appendChild(b); });
+    return;
+  }
   nm.textContent = sel.name;
   const locked = P.locks.includes(sel.object);
   if (!sel.editable) { hint.textContent = 'This comes straight from your model. Finishes for it are coming in a later version.'; lr.hidden = true; return; }
