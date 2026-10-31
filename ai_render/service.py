@@ -48,6 +48,7 @@ class Shot:
     index: np.ndarray
     exposure: float
     wb: list
+    depth: np.ndarray = None
 
 
 @dataclass
@@ -78,8 +79,10 @@ def subprocess_renderer(work_dir, model_path=None, quality="preview"):
             if p.returncode:
                 raise RuntimeError(p.stderr[-2000:])
         meta = json.load(open(os.path.join(out, "meta.json")))
+        dpath = os.path.join(out, "depth.npy")
         return Shot(np.array(Image.open(os.path.join(out, "image.png")).convert("RGB")),
-                    np.load(os.path.join(out, "index.npy")).astype(np.int32), meta["exposure"], meta["wb"])
+                    np.load(os.path.join(out, "index.npy")).astype(np.int32), meta["exposure"], meta["wb"],
+                    np.load(dpath).astype(np.float32) if os.path.exists(dpath) else None)
     render.cached = lambda state, exposure=None, wb=None: os.path.exists(os.path.join(
         work_dir, "renders", hashlib.sha1(json.dumps([state, exposure, wb, model_path, quality], sort_keys=True).encode()).hexdigest()[:16], "meta.json"))
     return render
@@ -91,6 +94,7 @@ class Project:
     renderer: object
     layers: list = field(default_factory=list)
     locks: set = field(default_factory=set)
+    finisher: object = None  # AI finish callable, or None when not configured
     _memo: dict = field(default_factory=dict)
 
     # ----- editing -----
@@ -121,6 +125,9 @@ class Project:
         self.locks.clear()
 
     # ----- composition -----
+    def ai_on(self):
+        return any(l.on and l.set.get("ai_finish") for l in self.layers)
+
     def plan(self):
         """(base_state, [(finish_key, cumulative_state), ...]) for enabled layers."""
         base = dict(DEFAULT)
@@ -149,21 +156,35 @@ class Project:
         return sum(0 if cached(s, b.exposure, b.wb) else 1 for _, s in steps)
 
     def compose(self):
+        """Base render (+ AI finish of the base), then each finish edit as a masked
+        layer. With AI on, each edit is AI-finished only inside its own region, so
+        the rest of the approved image never changes."""
+        from . import ai_finish as A
         base_state, steps = self.plan()
         base = self.renderer(base_state)
-        image, index = base.image.copy(), base.index
+        use_ai = self.ai_on() and self.finisher is not None
+        ai_report = None
+        start = base.image
+        if use_ai:
+            r = self.finisher(base.image, base.depth, base.index, A.finish_mask(base.index), seed=7)
+            start, ai_report = r["image"], {"accepted": r["accepted"], "edge_agreement": r["edge_agreement"]}
+        image, index = start.copy(), base.index
         edited = np.zeros(index.shape, bool)
         for keys, state in steps:
             shot = self.renderer(state, base.exposure, base.wb)
             region = np.zeros(index.shape, bool)
             for k in keys:
                 region |= E.edit_region(index, shot.index, k)
-            image = E.composite(image, shot.image, region)
+            layer_img = shot.image
+            if use_ai:
+                r = self.finisher(shot.image, shot.depth, shot.index, region & A.finish_mask(shot.index), seed=7)
+                layer_img = r["image"]
+            image = E.composite(image, layer_img, region)
             index = shot.index
             edited |= region
-        outside_same = bool((image[~edited] == base.image[~edited]).all())
+        outside_same = bool((image[~edited] == start[~edited]).all())
         return {"image": image, "index": index, "edited": edited, "outside_identical": outside_same,
-                "renders": 1 + len(steps)}
+                "renders": 1 + len(steps), "ai": ai_report}
 
     def pick(self, index, fx, fy):
         h, w = index.shape

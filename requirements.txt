@@ -8,3 +8,4 @@ fastapi
 uvicorn
 python-multipart
 httpx
+fal-client>=1.0

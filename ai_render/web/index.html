@@ -101,6 +101,10 @@ button:disabled{opacity:.5;cursor:default}
       <div class="row">LED cove <button class="toggle" id="tCove" aria-label="LED cove"></button></div>
       <div class="seg" id="kelvins"></div>
     </div>
+    <div class="group"><span class="eyebrow">AI finish</span>
+      <div class="row">Photoreal finish <button class="toggle" id="tAI" aria-label="AI finish"></button></div>
+      <div class="hint" id="aiHint"></div>
+    </div>
     <div class="group"><span class="eyebrow">Selection</span>
       <div class="sel" id="selName">Nothing selected</div>
       <div class="hint" id="selHint">Tap an object in the picture.</div>
@@ -164,6 +168,7 @@ function wire() {
   });
   $('tPendant').onclick = () => layer('lights', `Lights: ${P.state.pendant ? 'off' : 'on'}`, {pendant: !P.state.pendant});
   $('tCove').onclick = () => layer('cove', `LED cove: ${P.state.cove ? 'off' : 'on'}`, {cove: !P.state.cove});
+  $('tAI').onclick = () => { if (!P.ai.available) return toast('AI finish is not set up on this server yet.'); layer('ai', `AI finish: ${P.ai.on ? 'off' : 'on'}`, {ai_finish: !P.ai.on}); };
   $('tLock').onclick = async () => { P = await api(`/api/projects/${P.id}/locks`, json('POST', {object: sel.object, locked: !P.locks.includes(sel.object)})); show(P); };
   $('reset').onclick = async () => { sel = null; $('overlay').hidden = true; P = await api(`/api/projects/${P.id}/reset`, {method: 'POST'}); show(P); watch(); };
   $('ask').addEventListener('submit', async e => {
@@ -199,6 +204,10 @@ function show(p) {
   const K = $('kelvins'); K.innerHTML = '';
   [2700, 3000, 4000].forEach(k => { const b = document.createElement('button'); b.className = 'chip'; b.type = 'button'; b.textContent = `${k} K`; b.setAttribute('aria-pressed', p.state.kelvin === k); b.onclick = () => layer('kelvin', `Lights: ${k} K`, {kelvin: k}); K.appendChild(b); });
   $('tPendant').setAttribute('aria-pressed', p.state.pendant); $('tCove').setAttribute('aria-pressed', p.state.cove);
+  $('tAI').setAttribute('aria-pressed', !!(p.ai && p.ai.on)); $('tAI').disabled = !(p.ai && p.ai.available);
+  $('aiHint').textContent = !(p.ai && p.ai.available) ? 'Not set up yet: the server needs a FAL_KEY.'
+    : p.ai.last && !p.ai.last.accepted ? `AI result rejected: edges moved (match ${(p.ai.last.edge_agreement * 100).toFixed(0)}%). Showing the render instead.`
+    : p.ai.last ? `Geometry check passed (${(p.ai.last.edge_agreement * 100).toFixed(0)}% of edges unchanged).` : 'Adds real texture and softness. Geometry is locked to your model.';
   const L = $('layers'); L.innerHTML = '';
   const base = document.createElement('label'); base.textContent = p.model ? `Base: ${p.model}` : 'Base: sample room'; base.style.color = 'var(--muted)'; L.appendChild(base);
   p.layers.forEach(l => {

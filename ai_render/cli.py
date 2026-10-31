@@ -31,6 +31,7 @@ def main():
     wb = np.array([float(x) for x in a.wb.split(",")], np.float32) if a.wb else None
     r = R.render(a.out, "image", exposure=a.exposure, wb=wb, passes=False, key=mo["key"], wb_strength=mo["wb"])
     np.save(os.path.join(a.out, "index.npy"), r["index"].astype(np.uint8))
+    np.save(os.path.join(a.out, "depth.npy"), r["depth"].astype(np.float16))
     with open(os.path.join(a.out, "meta.json"), "w") as f:
         json.dump({"exposure": r["exposure"], "wb": [float(x) for x in r["wb"]], "state": state}, f)
 

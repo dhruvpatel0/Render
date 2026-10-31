@@ -61,10 +61,29 @@ are stored.
 | `ai_render/cli.py` | One render in a fresh process (used by the web app) |
 | `ai_render/web/index.html` | The Render Studio screen |
 
+## AI finish (fal)
+
+The path-traced render is the base. The AI finish makes it photoreal with
+`fal-ai/flux-general/inpainting`, steered by depth and edge maps taken from the 3D scene, so walls,
+furniture and the camera cannot move. The result is pasted back only inside the finish mask, and an
+edge check rejects any result whose edges drift (below 85% agreement). After the base is finished once,
+each later edit is finished only inside its own region, so the rest of the image never changes.
+
+Setup:
+
+1. Create a key at https://fal.ai/dashboard/keys.
+2. `cp .env.example .env` and set `FAL_KEY=...` (or set `FAL_KEY` as an environment secret).
+   The key is read on the server only. It is never sent to the browser or logged.
+3. Start the server and open the page. The "AI finish" switch becomes active.
+   `GET /api/ai` shows the provider, the endpoint and whether the key is present.
+
+Optional settings: `AI_FINISH_ENDPOINT` and `AI_FINISH_UNION` (ControlNet union model path).
+Each request ID is logged to `data/<project>/fal_requests.jsonl`, and results are cached by input,
+so the same request is never paid for twice.
+
 ## Next
 
-1. AI finish: geometry-locked diffusion (depth + edge control, masked inpainting) on top of the path-traced base.
-   Needs network access to an image model provider and an API key, or a GPU host.
+1. Real AI finish run: needs `FAL_KEY` and network access to `fal.run` / `queue.fal.run` (see below).
 2. GPU rendering (CUDA/OptiX) for seconds-per-image instead of minutes.
 3. Real SketchUp scenes: better automatic labelling of objects and materials.
 
