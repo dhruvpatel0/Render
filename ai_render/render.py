@@ -42,6 +42,7 @@ def configure(width=1280, height=800, samples=96, threads=0):
     vl.use_pass_z = True
     vl.use_pass_normal = True
     vl.use_pass_object_index = True
+    vl.use_pass_material_index = True
     sc.render.image_settings.media_type = "MULTI_LAYER_IMAGE"
     sc.render.image_settings.file_format = "OPEN_EXR_MULTILAYER"
     sc.render.image_settings.color_depth = "32"
@@ -110,12 +111,14 @@ def render(out_dir, name="beauty", exposure=None, wb=None, passes=True, key=0.20
         exposure = auto_exposure(rgb, idx, key)
     img = tonemap(rgb, exposure)
     Image.fromarray(img).save(os.path.join(out_dir, f"{name}.png"))
-    res = {"image": img, "index": idx, "exposure": exposure, "wb": wb, "linear": rgb}
+    res = {"image": img, "index": idx, "exposure": exposure, "wb": wb, "linear": rgb,
+           "matindex": np.rint(_find(ch, "Material Index", "X")).astype(np.int32)}
+    z = _find(ch, "Depth", "Z")
+    zz = np.clip(z, 0, 12)
+    near, far = np.percentile(zz, 1), np.percentile(zz, 99)
+    dep = 1 - np.clip((zz - near) / (far - near + 1e-6), 0, 1)
+    res["depth"] = dep
     if passes:
-        z = _find(ch, "Depth", "Z")
-        zz = np.clip(z, 0, 12)
-        near, far = np.percentile(zz, 1), np.percentile(zz, 99)
-        dep = 1 - np.clip((zz - near) / (far - near + 1e-6), 0, 1)
         Image.fromarray((dep * 255).astype(np.uint8)).save(os.path.join(out_dir, f"{name}_depth.png"))
         n = _find(ch, "Normal", "XYZ")
         Image.fromarray(((n * 0.5 + 0.5).clip(0, 1) * 255).astype(np.uint8)).save(os.path.join(out_dir, f"{name}_normal.png"))
@@ -129,6 +132,5 @@ def render(out_dir, name="beauty", exposure=None, wb=None, passes=True, key=0.20
             m = idx == k
             if m.any():
                 Image.fromarray((m * 255).astype(np.uint8)).save(os.path.join(mdir, f"{name}_{key}.png"))
-        res["depth"] = dep
     os.remove(exr)
     return res

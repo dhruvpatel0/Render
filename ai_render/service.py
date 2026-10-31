@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image
 
 from . import edit as E
+from . import library as LIB
 from .scene import SEMANTIC
 
 DEFAULT = {"moment": "Golden hour", "pendant": True, "cove": True, "kelvin": 3000,
@@ -48,6 +49,13 @@ class Shot:
     index: np.ndarray
     exposure: float
     wb: list
+    depth: np.ndarray = None
+    matindex: np.ndarray = None
+    materials: list = None  # [{"slot", "index", ...}] from the scene
+
+
+def is_finish(key):
+    return key in FINISH_KEYS or key.startswith("mat:")
 
 
 @dataclass
@@ -78,8 +86,26 @@ def subprocess_renderer(work_dir, model_path=None, quality="preview"):
             if p.returncode:
                 raise RuntimeError(p.stderr[-2000:])
         meta = json.load(open(os.path.join(out, "meta.json")))
+        opt = lambda f: os.path.join(out, f) if os.path.exists(os.path.join(out, f)) else None
         return Shot(np.array(Image.open(os.path.join(out, "image.png")).convert("RGB")),
-                    np.load(os.path.join(out, "index.npy")).astype(np.int32), meta["exposure"], meta["wb"])
+                    np.load(os.path.join(out, "index.npy")).astype(np.int32), meta["exposure"], meta["wb"],
+                    np.load(opt("depth.npy")).astype(np.float32) if opt("depth.npy") else None,
+                    np.load(opt("matindex.npy")).astype(np.int32) if opt("matindex.npy") else None,
+                    json.load(open(opt("materials.json"))) if opt("materials.json") else None)
+
+    def inspect():
+        """The model's own materials (names, colours, textures), without rendering."""
+        out = os.path.join(work_dir, "inspect")
+        if not os.path.exists(os.path.join(out, "materials.json")):
+            cmd = [sys.executable, "-m", "ai_render.cli", "--state", "{}", "--out", out, "--inspect"]
+            if model_path:
+                cmd += ["--model", model_path]
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            p = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+            if p.returncode:
+                raise RuntimeError(p.stderr[-2000:])
+        return json.load(open(os.path.join(out, "materials.json")))
+    render.inspect = inspect if model_path else None
     render.cached = lambda state, exposure=None, wb=None: os.path.exists(os.path.join(
         work_dir, "renders", hashlib.sha1(json.dumps([state, exposure, wb, model_path, quality], sort_keys=True).encode()).hexdigest()[:16], "meta.json"))
     return render
@@ -91,6 +117,10 @@ class Project:
     renderer: object
     layers: list = field(default_factory=list)
     locks: set = field(default_factory=set)
+    finisher: object = None  # AI finish callable, or None when not configured
+    library: object = None   # material library (library.Library)
+    scene_materials: list = None  # the model's own materials, from inspect
+    auto_materials: dict = field(default_factory=dict)  # {"mat:<slot>": value} matched on import
     _memo: dict = field(default_factory=dict)
 
     # ----- editing -----
@@ -120,10 +150,43 @@ class Project:
         self.layers.clear()
         self.locks.clear()
 
+    # ----- materials -----
+    def lib(self):
+        if self.library is None:
+            self.library = LIB.default_library()
+        return self.library
+
+    def prepare(self):
+        """For an uploaded model: list its materials and auto-match each one to the
+        library. Confident matches become part of the base render."""
+        inspect = getattr(self.renderer, "inspect", None)
+        if self.scene_materials is not None or not inspect:
+            return
+        self.scene_materials = inspect()
+        for m in self.scene_materials:
+            best = self.lib().auto(m)
+            if best:
+                self.auto_materials["mat:" + m["slot"]] = best["value"]
+
+    def material_view(self, slot):
+        state = self.current_state()
+        info = next((m for m in self.scene_materials or [] if m["slot"] == slot), {"slot": slot})
+        cur = state.get("mat:" + slot)
+        sugg = self.lib().match(slot, info.get("color"), info.get("texture"), info.get("objects", ()))
+        return {"slot": slot, "key": "mat:" + slot, "color": info.get("color"),
+                "current": cur, "current_name": self.lib().name(cur) if cur else "SketchUp original",
+                "auto": self.auto_materials.get("mat:" + slot), "locked": ("mat:" + slot) in self.locks,
+                "suggestions": [{"value": r["value"], "name": self.lib().name(r["value"]), "score": r["score"],
+                                 "color": (r["value"][len(r["entry"].id):] or r["entry"].color),
+                                 "source": r["entry"].source} for r in sugg if r["score"] >= 0.25]}
+
     # ----- composition -----
+    def ai_on(self):
+        return any(l.on and l.set.get("ai_finish") for l in self.layers)
+
     def plan(self):
         """(base_state, [(finish_key, cumulative_state), ...]) for enabled layers."""
-        base = dict(DEFAULT)
+        base = {**DEFAULT, **self.auto_materials}
         for l in self.layers:
             if l.on:
                 base.update({k: v for k, v in l.set.items() if k in GLOBAL_KEYS})
@@ -131,8 +194,8 @@ class Project:
         for l in self.layers:
             if not l.on:
                 continue
-            fin = {k: v for k, v in l.set.items() if k in FINISH_KEYS}
-            if fin and any(cur[k] != v for k, v in fin.items()):
+            fin = {k: v for k, v in l.set.items() if is_finish(k)}
+            if fin and any(cur.get(k) != v for k, v in fin.items()):
                 cur = {**cur, **fin}
                 steps.append((list(fin), dict(cur)))
         return base, steps
@@ -149,37 +212,68 @@ class Project:
         return sum(0 if cached(s, b.exposure, b.wb) else 1 for _, s in steps)
 
     def compose(self):
+        """Base render (+ AI finish of the base), then each finish edit as a masked
+        layer. With AI on, each edit is AI-finished only inside its own region, so
+        the rest of the approved image never changes."""
+        from . import ai_finish as A
+        self.prepare()
         base_state, steps = self.plan()
         base = self.renderer(base_state)
-        image, index = base.image.copy(), base.index
+        use_ai = self.ai_on() and self.finisher is not None
+        ai_report = None
+        start = base.image
+        if use_ai:
+            r = self.finisher(base.image, base.depth, base.index, A.finish_mask(base.index), seed=7)
+            start, ai_report = r["image"], {"accepted": r["accepted"], "edge_agreement": r["edge_agreement"]}
+        image, index, matindex = start.copy(), base.index, base.matindex
         edited = np.zeros(index.shape, bool)
         for keys, state in steps:
             shot = self.renderer(state, base.exposure, base.wb)
             region = np.zeros(index.shape, bool)
             for k in keys:
-                region |= E.edit_region(index, shot.index, k)
-            image = E.composite(image, shot.image, region)
-            index = shot.index
+                if k.startswith("mat:"):
+                    i = next(m["index"] for m in shot.materials if m["slot"] == k[4:])
+                    region |= E.material_region(matindex, shot.matindex, i)
+                else:
+                    region |= E.edit_region(index, shot.index, k)
+            layer_img = shot.image
+            if use_ai:
+                r = self.finisher(shot.image, shot.depth, shot.index, region & A.finish_mask(shot.index), seed=7)
+                layer_img = r["image"]
+            image = E.composite(image, layer_img, region)
+            index, matindex = shot.index, shot.matindex
             edited |= region
-        outside_same = bool((image[~edited] == base.image[~edited]).all())
-        return {"image": image, "index": index, "edited": edited, "outside_identical": outside_same,
-                "renders": 1 + len(steps)}
+        outside_same = bool((image[~edited] == start[~edited]).all())
+        return {"image": image, "index": index, "matindex": matindex, "edited": edited,
+                "materials": (steps and shot.materials) or base.materials, "outside_identical": outside_same,
+                "renders": 1 + len(steps), "ai": ai_report}
 
-    def pick(self, index, fx, fy):
+    def pick(self, index, fx, fy, matindex=None, materials=None):
         h, w = index.shape
-        v = int(index[min(h - 1, max(0, int(fy * h))), min(w - 1, max(0, int(fx * w)))])
-        key = KEY_BY_INDEX.get(v, "side")
-        return {"object": key, "name": NAMES.get(key, key), "editable": key in SWATCH,
-                "locked": key in self.locks, "finishes": SWATCH.get(key, {}),
-                "current": self.current_state().get(key)}
+        y, x = min(h - 1, max(0, int(fy * h))), min(w - 1, max(0, int(fx * w)))
+        key = KEY_BY_INDEX.get(int(index[y, x]), "side")
+        out = {"object": key, "name": NAMES.get(key, key), "editable": key in SWATCH,
+               "locked": key in self.locks, "finishes": SWATCH.get(key, {}),
+               "current": self.current_state().get(key), "material": None}
+        if matindex is not None and materials:
+            i = int(matindex[y, x])
+            slot = next((m["slot"] for m in materials if m["index"] == i), None)
+            if slot:
+                out["material"] = self.material_view(slot)
+        return out
 
     def current_state(self):
         base, steps = self.plan()
         return steps[-1][1] if steps else base
 
     def to_json(self):
+        state = self.current_state()
+        mats = [{"slot": m["slot"], "color": m.get("color"), "current": state.get("mat:" + m["slot"]),
+                 "current_name": self.lib().name(state["mat:" + m["slot"]]) if state.get("mat:" + m["slot"]) else "SketchUp original",
+                 "auto": bool(state.get("mat:" + m["slot"])) and self.auto_materials.get("mat:" + m["slot"]) == state.get("mat:" + m["slot"])}
+                for m in self.scene_materials or []]
         return {"id": self.id, "layers": [l.to_json() for l in self.layers], "locks": sorted(self.locks),
-                "state": self.current_state()}
+                "state": state, "materials": mats}
 
 
 SYN = {"green": ["forest", "sage", "olive"], "blue": ["ink blue", "deep blue"], "orange": ["terracotta", "rust"],
