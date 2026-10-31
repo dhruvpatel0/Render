@@ -13,6 +13,13 @@ def edit_region(index_before, index_after, key, grow_px=6):
     return ndimage.binary_dilation(m, iterations=grow_px)
 
 
+def material_region(mat_before, mat_after, i, grow_px=4):
+    """Pixels a material swap may touch: every face with that material, in
+    either version, grown a little for soft edges."""
+    m = (mat_before == i) | (mat_after == i)
+    return ndimage.binary_dilation(m, iterations=grow_px)
+
+
 def composite(before, after, region, feather_px=2):
     """Take `after` inside the region, `before` everywhere else.
     The feather only blends inside the region, so outside stays byte-identical."""

@@ -20,7 +20,13 @@ def build(state, model_path=None, quality=None):
     if info.get("camera"):
         S.add_camera(**info["camera"])
     apply_finishes(state, model_path)
+    assign = {k[4:]: v for k, v in state.items() if k.startswith("mat:") and v}
+    if assign:
+        from .library import default_library
+        S.apply_materials(assign, default_library())
+    mats = S.scene_materials()
     R.configure(q["width"], q["height"], q["samples"])
+    return mats
 
 
 def apply_finishes(state, model_path=None):
