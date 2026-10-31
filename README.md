@@ -30,6 +30,22 @@ python -m ai_render.report demo_out                # writes demo_out/index.html
 pytest -q
 ```
 
+## Web app (Render Studio)
+
+```bash
+uvicorn ai_render.server:app --port 8000     # then open http://localhost:8000
+```
+
+Drop in a SketchUp export (`.fbx` or `.glb`) or try the sample room. Pick a moment, switch lights, tap an object
+to change its finish, lock objects you have approved, or type a change ("night, sofa forest green"). Every change
+is a layer you can switch off. After each edit the app checks that every pixel outside your edits matches the
+base render.
+
+Each render runs in a fresh process (`python -m ai_render.cli`) and results are cached, so switching a layer
+back on is instant. On 4 CPU cores a preview render (960×600) takes about 40-60 s; a cloud GPU will bring
+this to seconds. Set `AI_RENDER_QUALITY=final` for 1920×1200 renders and `AI_RENDER_DATA` for where projects
+are stored.
+
 ## Layout
 
 | File | What it does |
@@ -40,6 +56,10 @@ pytest -q
 | `ai_render/render.py` | Cycles setup, multilayer EXR read, passes, tone mapping |
 | `ai_render/edit.py` | Edit region, masked composite, drift verifier |
 | `ai_render/demo.py` | End-to-end proof: approved image, sofa edit, dusk and night |
+| `ai_render/service.py` | Projects, edit layers, locks, composition, tap-to-select, intent parser |
+| `ai_render/server.py` | FastAPI web API |
+| `ai_render/cli.py` | One render in a fresh process (used by the web app) |
+| `ai_render/web/index.html` | The Render Studio screen |
 
 ## Next
 

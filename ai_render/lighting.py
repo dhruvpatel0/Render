@@ -101,3 +101,19 @@ def add_interior_lights(pendant=True, cove=True, downlights=None, kelvin=2700, m
                 d.data.materials.append(M.emission(col, 15, "Downlight"))
                 d["semantic"] = "lights"
                 d.pass_index = 12
+
+
+def add_room_light(bounds, on=True, kelvin=3000):
+    """Imported models: one soft ceiling light, since fixture positions are unknown."""
+    if not on:
+        return
+    lo, hi = bounds
+    L = bpy.data.lights.new("Room light", "AREA")
+    L.shape = "RECTANGLE"
+    L.size = max(0.5, (hi.x - lo.x) * 0.5)
+    L.size_y = max(0.5, (hi.y - lo.y) * 0.5)
+    L.energy = 40 * L.size * L.size_y
+    L.color = kelvin_rgb(kelvin)
+    ob = bpy.data.objects.new("Room light", L)
+    bpy.context.scene.collection.objects.link(ob)
+    ob.location = ((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, hi.z - 0.05)
