@@ -1,0 +1,6 @@
+bpy==5.2.3
+numpy
+pillow
+scipy
+OpenEXR
+pytest

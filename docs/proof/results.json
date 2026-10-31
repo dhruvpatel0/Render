@@ -1,0 +1,30 @@
+{
+  "quality": {
+    "width": 1280,
+    "height": 800,
+    "samples": 64
+  },
+  "steps": [
+    {
+      "step": "approved render + passes",
+      "seconds": 203.5,
+      "exposure": 0.8325
+    },
+    {
+      "step": "sofa -> terracotta",
+      "seconds": 193.5,
+      "region_share": 0.0458,
+      "changed_outside_full_rerender": 0.67218,
+      "changed_outside_masked": 0.0,
+      "outside_pixels_byte_identical": true
+    },
+    {
+      "step": "moment Dusk",
+      "seconds": 233.4
+    },
+    {
+      "step": "moment Night",
+      "seconds": 222.5
+    }
+  ]
+}
