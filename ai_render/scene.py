@@ -167,7 +167,36 @@ def import_model(path):
         name = (ob.name + " " + " ".join(m.name for m in ob.data.materials if m)).lower()
         key = next((k for w, k in words.items() if w in name), "side")
         tag(ob, key)
-    return {"camera": None}
+        if _is_glass(ob, name):
+            ob.visible_shadow = False  # let sunlight through windows (no caustics needed)
+    return {"camera": auto_camera()}
+
+
+def _is_glass(ob, name):
+    if "glass" in name or "glazing" in name:
+        return True
+    for m in ob.data.materials:
+        b = m and m.node_tree and m.node_tree.nodes.get("Principled BSDF")
+        if b and (b.inputs["Transmission Weight"].default_value > 0.5 or b.inputs["Alpha"].default_value < 0.9):
+            return True
+    return False
+
+
+def scene_bounds():
+    pts = [ob.matrix_world @ Vector(c) for ob in bpy.context.scene.objects
+           if ob.type == "MESH" for c in ob.bound_box]
+    lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+    hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+    return lo, hi
+
+
+def auto_camera():
+    """Eye-level camera near one end of the model, looking along +Y.
+    A starting point only: the Frame step in the app lets people pick their own."""
+    lo, hi = scene_bounds()
+    size = hi - lo
+    z = lo.z + min(1.5, max(0.4 * size.z, 0.5))
+    return dict(location=((lo.x + hi.x) / 2, lo.y + 0.08 * size.y, z), lens=16, shift_y=0.0)
 
 
 def set_finish(key, finish):

@@ -4,3 +4,7 @@ pillow
 scipy
 OpenEXR
 pytest
+fastapi
+uvicorn
+python-multipart
+httpx
