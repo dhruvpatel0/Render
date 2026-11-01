@@ -83,3 +83,15 @@ def test_edit_after_ai_keeps_rest_of_ai_image():
     assert out["outside_identical"]
     assert (out["image"][~out["edited"]] == ai_base[~out["edited"]]).all()
     assert calls[-1] < 0.5  # the edit's AI pass only covered its own region
+
+
+def test_inline_result_needs_no_cdn():
+    import base64, io
+    from PIL import Image
+    img = np.zeros((4, 6, 3), np.uint8); img[1, 2] = (10, 20, 30)
+    buf = io.BytesIO(); Image.fromarray(img).save(buf, "png")
+    url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    assert (A._download(url) == img).all()
+    args = A.build_arguments(np.zeros((8, 8, 3), np.uint8), np.zeros((8, 8)), np.zeros((8, 8), np.uint8),
+                             np.ones((8, 8), bool), "", 7, 0.35, lambda im, f: "x")
+    assert args["sync_mode"] is True

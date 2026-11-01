@@ -76,6 +76,9 @@ def build_arguments(image, depth, edges, mask, prompt, seed, strength, encode):
         "num_inference_steps": 28,
         "guidance_scale": 3.5,
         "output_format": "png",
+        # Return the image inline (data URI) instead of a fal.media CDN link, so the
+        # server only ever needs to reach fal.run / queue.fal.run.
+        "sync_mode": True,
         "controlnet_unions": [{
             "path": UNION_PATH,
             "controls": [
@@ -88,6 +91,9 @@ def build_arguments(image, depth, edges, mask, prompt, seed, strength, encode):
 
 
 def _download(url):
+    if url.startswith("data:"):
+        import base64
+        return np.array(Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).convert("RGB"))
     with urllib.request.urlopen(url, timeout=120) as r:
         return np.array(Image.open(io.BytesIO(r.read())).convert("RGB"))
 
