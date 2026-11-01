@@ -110,7 +110,10 @@ so the same request is never paid for twice.
 
 ## Next
 
-1. Real AI finish run: needs `FAL_KEY` and network access to `fal.run` / `queue.fal.run` (see below).
+1. Tune the AI finish. First real run (2026-11-01, sample room, 960×600): strength 0.35 passed the edge check
+   (90% agreement) but the change is subtle and softens the artwork; strength 0.6 was rejected (80%) because it
+   erased the sun patches and the artwork. Results come back inline (`sync_mode`), so only `fal.run` /
+   `queue.fal.run` need to be reachable, not the `fal.media` CDN.
 2. GPU rendering (CUDA/OptiX) for seconds-per-image instead of minutes.
 3. Real SketchUp scenes: better automatic labelling of objects and materials.
 
